@@ -2,3 +2,6 @@ bin/
 obj/
 .vs/
 images/
+
+resources.bin
+resources.inc
