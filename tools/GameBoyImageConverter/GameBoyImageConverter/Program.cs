@@ -70,7 +70,7 @@ namespace GameBoyImageConverter
                     $"{pair.Value,6}\t{string.Join(" ", pair.Key.Select(b => b.ToString("X2")))}\r\n");
             }
             WriteLine("Logged to `MostFrequentTiles.log`.");
-            var mostFrequentTilesDict = mostFrequentTiles
+            var commonDict = mostFrequentTiles
                 .Select((pair, index) => (pair.Key, index))
                 .ToDictionary(tuple => tuple.Key, tuple => (byte)tuple.index, new ByteArrayComparer());
 
@@ -82,29 +82,37 @@ namespace GameBoyImageConverter
                 stream.Write(pair.Key);
             }
             long lastFramePos = 0;
+            var maxUniqueTiles = 0;
+            var maxUniqueTilesFrame = -1;
             for (var frameIndex = 0; frameIndex < totalFrames; frameIndex++)
             {
                 byte frameSpecificTiles = 0;
-                var tileSet = new byte[16 * TilesPerFrame];
+                var frameDict = new Dictionary<byte[], byte>(TilesPerFrame, new ByteArrayComparer());
                 var bgMap = new byte[TilesPerFrame];
                 for (var tileIndex = 0; tileIndex < TilesPerFrame; tileIndex++)
                 {
                     var tile = frameData[frameIndex, tileIndex];
-                    if (mostFrequentTilesDict.ContainsKey(tile))
+                    if (commonDict.ContainsKey(tile))
                     {
-                        bgMap[tileIndex] = (byte)(256 - DictionarySize + mostFrequentTilesDict[tile]);
+                        bgMap[tileIndex] = (byte)(256 - DictionarySize + commonDict[tile]);
+                    }
+                    else if (frameDict.ContainsKey(tile))
+                    {
+                        bgMap[tileIndex] = frameDict[tile];
                     }
                     else
                     {
-                        for (var i = 0; i < 16; i++)
-                        {
-                            tileSet[16 * frameSpecificTiles + i] = tile[i];
-                        }
+                        frameDict.Add(tile, frameSpecificTiles);
                         bgMap[tileIndex] = frameSpecificTiles;
                         frameSpecificTiles++;
                     }
                 }
-                Array.Resize(ref tileSet, 16 * frameSpecificTiles);
+                if (frameSpecificTiles > maxUniqueTiles)
+                {
+                    maxUniqueTiles = frameSpecificTiles;
+                    maxUniqueTilesFrame = frameIndex * (FrameSkip + 1);
+                }
+                var tileSet = frameDict.OrderBy(pair => pair.Value).SelectMany(pair => pair.Key).ToArray();
                 var bankRemainingSpace = 0x4000 - stream.BaseStream.Position % 0x4000;
                 var frameSize = tileSet.Length + bgMap.Length + 1;
                 if (bankRemainingSpace < frameSize)
@@ -122,36 +130,31 @@ namespace GameBoyImageConverter
                 Write($"\rWriting binary... {frameIndex + 1} / {totalFrames}");
             }
             stream.Write((byte)0xFF);
+            var fileSize = stream.BaseStream.Position;
             stream.Close();
             WriteLine();
-            WriteLine("Binary saved to `resources.bin`.");
             WriteLine("Frame offset saved to `frame.map`.");
+            WriteLine("Binary saved to `resources.bin`.");
+            File.WriteAllText("resources.inc", "");
+            for (var i = 0; i * 0x4000 < fileSize; i++)
+            {
+                File.AppendAllText("resources.inc",
+$@"
+SECTION ""Bank{i + 1}"", ROMX, BANK[{i + 1}]
+INCBIN ""resources.bin"", {i * 0x4000}, {Math.Min(fileSize - i * 0x4000, 0x4000)}
+");
+            }
+            WriteLine("RGBDS include file saved to `resources.inc`.");
 
             WriteLine("Done.");
             WriteLine();
-
-            var maxUniqueTiles = 0;
-            var maxUniqueTilesFrame = -1;
-            for (var i = 0; i < totalFrames; i++)
-            {
-                var uniqueTiles = 0;
-                for (var j = 0; j < TilesPerFrame; j++)
-                {
-                    if (!mostFrequentTilesDict.ContainsKey(frameData[i, j]))
-                        uniqueTiles++;
-                }
-                if (uniqueTiles > maxUniqueTiles)
-                {
-                    maxUniqueTiles = uniqueTiles;
-                    maxUniqueTilesFrame = i * (FrameSkip + 1);
-                }
-            }
+            
             WriteLine($"Frame with the most unique tiles: {maxUniqueTilesFrame}, {maxUniqueTiles} tiles");
             WriteLine($"Total tile variants: {dict.Count}");
-            var totalUniqueTiles = dict.Aggregate(0, (total, next) => total + (mostFrequentTilesDict.ContainsKey(next.Key) ? 0 : next.Value));
+            var totalUniqueTiles = dict.Aggregate(0, (total, next) => total + (commonDict.ContainsKey(next.Key) ? 0 : next.Value));
             WriteLine($"Total unique tiles: {totalUniqueTiles} out of {totalFrames * TilesPerFrame}");
-            WriteLine($"File size: {lastFramePos / 1024.0:F0} KiB");
-            WriteLine($"Compression ratio: {(double)lastFramePos * 100 / (5101 * totalFrames + 16 * DictionarySize + 1):F1}%");
+            WriteLine($"File size: {fileSize}");
+            WriteLine($"Compression ratio: {(double)fileSize * 100 / (5101 * totalFrames + 16 * DictionarySize + 1):F1}%");
 
             WriteLine();
             WriteLine("Press any key to continue...");
