@@ -220,9 +220,13 @@ Draw:
                 inc de
             ENDR
         ENDR
-        REPT 12
-            inc de
-        ENDR
+.add_de_12\@
+        ld a, e             ; 1
+        add 12              ; 1
+        jr nc, .noCarry\@   ; 3|2
+        inc d               ; 1
+.noCarry\@
+        ld e, a             ; 1
     ENDR
     
     ldh a, [altBuffer]
